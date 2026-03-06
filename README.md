@@ -10,7 +10,6 @@ LightGBM with behavioral feature engineering, Optuna hyperparameter tuning, and 
 | Version | Model | ROC AUC | PR AUC | Δ ROC | Δ PR |
 |---------|-------|--------:|-------:|------:|-----:|
 | v0 | LightGBM — raw features, default params | 0.9196 | 0.5804 | — | — |
-| v1 | LightGBM + aggregations + velocity features | 0.9235 | 0.5813 | +0.0039 | +0.0009 |
 | **v2** | **LightGBM + behavioral features + Optuna med_high** | **0.9272** | **0.6039** | **+0.0076** | **+0.0235** |
 | v2 | XGBoost + Optuna med | 0.9226 | 0.5641 | +0.0030 | −0.0163 |
 | v2 | Ensemble (LightGBM + XGBoost) — built, evaluated, cancelled | 0.9264 | 0.5907 | +0.0068 | +0.0103 |
@@ -38,7 +37,6 @@ ML_Fraud_detection/
 ├── data/           # Raw CSVs and processed parquet files
 ├── src/            # Shared modules: preprocessing, training, tuning, evaluation
 ├── v0/             # Baseline — ROC 0.9196 | PR 0.5804
-├── v1/             # Aggregations & velocity — ROC 0.9235 | PR 0.5813
 ├── v2/             # Behavioral features + Optuna — ROC 0.9272 | PR 0.6039
 └── outputs/        # Models, preprocessed splits, Optuna params
 ```
@@ -47,15 +45,15 @@ ML_Fraud_detection/
 
 ## Pipeline Overview
 
-The pipeline runs across 4 notebooks in `v2/` in order:
+The pipeline runs across 4 notebooks in order:
 
-**`01_eda_v2.ipynb`** — Exploratory data analysis: fraud patterns, feature correlations, UID validation.
+**`01_eda.ipynb`** *(root)* — Exploratory data analysis: fraud patterns, feature correlations, UID validation.
 
-**`02_feature_engineering.ipynb`** — Builds all 23 engineered features. Runs on the full training set before the train/val split to prevent leakage.
+**`v2/02_feature_engineering.ipynb`** — Builds all 23 engineered features. Runs on the full training set before the train/val split to prevent leakage.
 
-**`03_preprocess_train_clean_optuna3.ipynb`** — Time-based train/val split (80/20 by `TransactionDT`), label encoding, Optuna tuning for LightGBM and XGBoost.
+**`v2/03_preprocess_train_clean_optuna.ipynb`** — Time-based train/val split (80/20 by `TransactionDT`), label encoding, Optuna tuning for LightGBM and XGBoost.
 
-**`04_predict_evaluate.ipynb`** — Trains final models, evaluates all models and ensemble, plots ROC/PR curves and feature importance.
+**`v2/04_predict_evaluate.ipynb`** — Trains final models, evaluates all models and ensemble, plots ROC/PR curves and feature importance.
 
 > Set `PREPROC_READY_LGBM_XGB = True` and `RUN_OPTUNA_LGBM = False` / `RUN_OPTUNA_XGB = False` in notebook 03 to skip rerunning preprocessing and tuning if artifacts already exist on disk.
 
@@ -63,20 +61,13 @@ The pipeline runs across 4 notebooks in `v2/` in order:
 
 ## Feature Engineering — 23 Features
 
-All features are computed on the full dataset before the train/val split. No-leakage guarantee: all aggregations use `expanding().shift(1)` or `rolling(closed='left')` — the current row is always excluded.
+All features are computed on the full dataset before the train/val split. No-leakage guarantee: every aggregation uses only strictly prior transactions — the current row is always excluded.
 
-**v1 — Aggregation & Velocity (19 features)**
-- Cumulative transaction statistics per user (UID = `card1 + addr1`): count, mean, std, min, max of `TransactionAmt`
-- Multi-period velocity: transaction counts over last 3d / 7d / 30d windows
-- Delta to previous transaction: amount change, time since last transaction
-- Email domain instability: new payer/recipient email flags, nunique per card (fraud lift up to 1.85×)
-- Device instability: new device flag, nunique per card (fraud lift 1.66×)
+**Aggregation Features (16)** — Cumulative transaction statistics and multi-period velocity windows per card, plus email and device instability signals (new recipient email: fraud lift 1.85×, new device: fraud lift 1.66×).
 
-**v2 — Behavioral Fingerprint + Product Profile (4 + 1 features)**
-- Deviation from personal median amount (`amt_vs_personal_median`, `amt_z_score`)
-- Unusual transaction hour for this specific card (`hour_vs_typical`)
-- Behavioral entropy: `uid_time_entropy` — unpredictability of transaction timing
-- Product profile: `is_new_product` — new product category for this card
+**Behavioral Fingerprint (4)** — How unusual is this transaction relative to this specific card's established personal pattern.
+
+**Product Profile (1)** — Flags a product category that is new for this card.
 
 ---
 
@@ -89,9 +80,9 @@ Optuna TPE (Tree-structured Parzen Estimator) — independent tuning per model:
 | LightGBM | med_high | 75 | 75% of train | ~10h |
 | XGBoost | med | 50 | 50% of train | ~3h |
 
-Running med_high for LightGBM yielded +0.0017 ROC AUC over med (0.9255 → 0.9272). Given the modest gain, XGBoost was not re-tuned at med_high level.
+Optuna quality levels control the number of trials and training sample size: `med` (50 trials, 50% of train) and `med_high` (75 trials, 75% of train). LightGBM was tuned at `med_high` (~10h CPU); the marginal gain did not justify re-running XGBoost beyond `med`.
 
-> **Note on CatBoost:** CatBoost was evaluated as a third ensemble component. Optuna MED tuning was killed after ~10 hours with only ~50% of trials completed — its ordered target statistics encoding is extremely compute-intensive on CPU. The partially trained model (ROC 0.9177) was below the v0 baseline (0.9196) and was removed from the pipeline. CatBoost with GPU remains a future candidate.
+> **Note on CatBoost:** Evaluated as a third ensemble component; removed after Optuna tuning was killed at ~50% trials (~10h CPU). Remains a future candidate with GPU.
 
 ---
 
@@ -108,7 +99,6 @@ Running med_high for LightGBM yielded +0.0017 ROC AUC over med (0.9255 → 0.927
 | Level | ROC AUC |
 |-------|--------:|
 | 1st place (Chris Deotte) — GPU, multi-model ensemble | 0.9459 |
-| Top 1% — gold medal threshold | ~0.940+ |
 | Top 5% — community-reported threshold | ~0.9230 |
 | **This project — v2 LightGBM (CPU only)** | **0.9272** |
 | v0 baseline | 0.9196 |
@@ -144,9 +134,9 @@ pip install -r requirements.txt
 # train_transaction.csv, train_identity.csv, test_transaction.csv, test_identity.csv
 
 # 3. Run notebooks in order
-jupyter notebook v2/01_eda_v2.ipynb
+jupyter notebook 01_eda.ipynb
 jupyter notebook v2/02_feature_engineering.ipynb
-jupyter notebook v2/03_preprocess_train_clean_optuna3.ipynb
+jupyter notebook v2/03_preprocess_train_clean_optuna.ipynb
 jupyter notebook v2/04_predict_evaluate.ipynb
 ```
 
