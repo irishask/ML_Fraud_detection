@@ -49,6 +49,7 @@ import json
 
 import numpy as np
 import optuna
+from optuna.callbacks import EarlyStoppingCallback
 from sklearn.metrics import roc_auc_score
 from tqdm.auto import tqdm
 
@@ -99,6 +100,14 @@ RANDOM_SEED = 42
 # Class imbalance ratio for scale_pos_weight (XGBoost).
 # WHY 28: neg/pos ≈ (1 - 0.035) / 0.035 ≈ 27.6 → rounded to 28.
 SCALE_POS_WEIGHT = 28
+
+# Study-level early stopping: stop the entire Optuna search if the best AUC
+# does not improve by at least MIN_DELTA across STUDY_PATIENCE consecutive trials.
+# WHY needed: per-trial early_stopping only stops a single LightGBM/XGBoost train.
+# Without this, Optuna runs all n_trials even if the search has already converged —
+# wasting hours on trials that cannot improve the result.
+STUDY_PATIENCE  = 15     # trials without improvement before stopping the study
+STUDY_MIN_DELTA = 0.0001 # minimum AUC gain to count as improvement
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -306,13 +315,18 @@ def tune_lgbm(X_train, y_train, X_val, y_val,
         sampler=optuna.samplers.TPESampler(seed=RANDOM_SEED),
     )
 
-    ## TQDM BAR
+    ## TQDM BAR + STUDY-LEVEL EARLY STOPPING
+    early_stop_study = EarlyStoppingCallback(
+        patience=STUDY_PATIENCE,
+        min_delta=STUDY_MIN_DELTA,
+    )
     if verbose:
         with tqdm(total=n_trials, desc="Optuna LightGBM", unit="trial") as pbar:
             study.optimize(objective, n_trials=n_trials,
-                           callbacks=[_make_progress_callback(pbar)])
+                           callbacks=[_make_progress_callback(pbar), early_stop_study])
     else:
-        study.optimize(objective, n_trials=n_trials)
+        study.optimize(objective, n_trials=n_trials,
+                       callbacks=[early_stop_study])
 
 
     best_params = study.best_params
@@ -424,13 +438,18 @@ def tune_xgb(X_train, y_train, X_val, y_val,
         sampler=optuna.samplers.TPESampler(seed=RANDOM_SEED),
     )
 
-    ## TQDM BAR
+    ## TQDM BAR + STUDY-LEVEL EARLY STOPPING
+    early_stop_study = EarlyStoppingCallback(
+        patience=STUDY_PATIENCE,
+        min_delta=STUDY_MIN_DELTA,
+    )
     if verbose:
         with tqdm(total=n_trials, desc="Optuna XGBoost", unit="trial") as pbar:
             study.optimize(objective, n_trials=n_trials,
-                           callbacks=[_make_progress_callback(pbar)])
+                           callbacks=[_make_progress_callback(pbar), early_stop_study])
     else:
-        study.optimize(objective, n_trials=n_trials)
+        study.optimize(objective, n_trials=n_trials,
+                       callbacks=[early_stop_study])
 
 
     best_params = study.best_params

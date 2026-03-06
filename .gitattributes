@@ -1,0 +1,4 @@
+# ── Language Statistics ───────────────────────────────────────────────────────
+# Mark Jupyter notebooks as documentation so GitHub Linguist counts Python
+# as the primary language. Notebooks are still fully tracked by Git.
+*.ipynb linguist-documentation=true
