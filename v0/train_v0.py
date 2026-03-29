@@ -53,16 +53,15 @@ def train_lgbm(X_train, y_train, X_val, y_val,
     Parameters
     ----------
     X_train        : pd.DataFrame — training features
-    y_train        : pd.Series — training target
-    X_val          : pd.DataFrame — validation features
-    y_val          : pd.Series — validation target
+    y_train        : pd.Series    — training target
+    X_val          : pd.DataFrame — validation features for early stopping
+    y_val          : pd.Series    — validation target
     params         : dict or None — LightGBM parameters (None = use DEFAULT_LGBM_PARAMS)
-    early_stopping : int — stop training if no AUC improvement for this many rounds.
-                     Default=200: large enough to escape local plateaus (common around
-                     rounds 300–500), small enough to avoid wasting compute time
-    log_period     : int — print validation score every N rounds (default=100).
-                     Gives visibility into training progress without excessive output
-    verbose        : bool — print training summary
+    early_stopping : int          — stop if no AUC improvement for this many rounds.
+                     Default=200: large enough to escape local plateaus, small enough
+                     to avoid wasting compute time
+    log_period     : int          — print validation score every N rounds (default=100)
+    verbose        : bool         — print training summary
 
     Returns
     -------
@@ -70,13 +69,12 @@ def train_lgbm(X_train, y_train, X_val, y_val,
         model      — fitted LGBMClassifier
         y_pred_val — predicted probabilities on validation set
     """
-    # Use default params if none provided
     params = params or DEFAULT_LGBM_PARAMS.copy()
 
     if verbose:
         print(">> Training LightGBM...")
-        print(f"   Train: {X_train.shape[0]:,} samples × {X_train.shape[1]} features")
-        print(f"   Val:   {X_val.shape[0]:,} samples × {X_val.shape[1]} features")
+        print(f"   Train: {X_train.shape[0]:,} samples x {X_train.shape[1]} features")
+        print(f"   Val:   {X_val.shape[0]:,} samples x {X_val.shape[1]} features")
         print(f"   Early stopping: {early_stopping} rounds")
         print(f"   Key params: lr={params.get('learning_rate')}, "
               f"leaves={params.get('num_leaves')}, "
@@ -93,7 +91,6 @@ def train_lgbm(X_train, y_train, X_val, y_val,
         ],
     )
 
-    # Predict probabilities on validation set
     y_pred_val = model.predict_proba(X_val)[:, 1]
 
     if verbose:

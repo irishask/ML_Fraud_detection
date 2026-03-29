@@ -62,6 +62,22 @@ OUTPUTS_DIR  = PROJECT_ROOT / "outputs"
 ENRICHED_DIR = OUTPUTS_DIR / "enriched"   # output of 02_feature_engineering.ipynb
 PREPROC_DIR  = OUTPUTS_DIR / "preproc"    # output of 03_preprocess_train.ipynb
 
+# ── ENRICHED FILE PATHS ───────────────────────────
+# WHY explicit path constants: avoids string construction in notebooks and
+# ensures a single source of truth for all artifact locations.
+TRAIN_ENRICHED = ENRICHED_DIR / "train_enriched.parquet"  # 60% train features
+Y_TRAIN        = ENRICHED_DIR / "y_train.parquet"         # 60% train labels
+VAL_ENRICHED   = ENRICHED_DIR / "val_enriched.parquet"    # 20% val features (early stopping + Optuna)
+Y_VAL          = ENRICHED_DIR / "y_val.parquet"           # 20% val labels
+TEST_ENRICHED  = ENRICHED_DIR / "test_enriched.parquet"   # 20% frozen TEST features (touched once)
+Y_TEST         = ENRICHED_DIR / "y_test.parquet"          # 20% frozen TEST labels
+
+# ── PREPROC FILE PATHS ────────────────────────────
+# WHY explicit path constants: same reason as above — single source of truth.
+X_TRAIN_LGBM   = PREPROC_DIR / "X_train_lgbm.parquet"    # encoded 60% train
+X_VAL_LGBM     = PREPROC_DIR / "X_val_lgbm.parquet"      # encoded 20% val
+X_TEST_LGBM    = PREPROC_DIR / "X_test_lgbm.parquet"     # encoded 20% frozen TEST
+
 # ── REPRODUCIBILITY ───────────────────────────────
 SEED = 42
 
@@ -69,9 +85,6 @@ SEED = 42
 TARGET = "isFraud"
 ID_COL = "TransactionID"
 TIME_COL = "TransactionDT"
-
-# ── VALIDATION ────────────────────────────────────
-TRAIN_RATIO = 0.80  # 80% train, 20% validation (by time)
 
 # ── COLUMNS TO EXCLUDE FROM MODEL FEATURES ────────
 NON_FEATURE_COLS = [TARGET, ID_COL, TIME_COL]

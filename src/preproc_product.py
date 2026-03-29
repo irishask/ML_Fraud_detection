@@ -1,8 +1,7 @@
 """
 preproc_product.py — Product Profile Features
 ══════════════════════════════════════════════
-Computes 1 feature that captures whether a transaction involves a product
-type that is new for this user (card1 + addr1).
+Computes 2 features that capture product-level transaction patterns.
 
 MODEL-AGNOSTIC — used by all models (LightGBM, XGBoost, CatBoost).
 
@@ -11,15 +10,15 @@ time_split(), so that test transactions see their complete prior history.
 
 No-leakage guarantee:
     is_new_product uses groupby.cumcount() on uid + ProductCD pairs.
-    cumcount() = 0 means this is the first occurrence of this product
-    for this user — a fact about the current transaction itself, not
-    derived from future data. isFraud is never used.
+    amt_vs_product_median uses groupby(ProductCD).expanding().shift(1).
+    Both use only strictly prior transactions. isFraud is never used.
 
-New features (1 total):
-    is_new_product — 1 if user is buying this ProductCD for the first time
+New features (2 total):
+    is_new_product       — 1 if user is buying this ProductCD for the first time
+    amt_vs_product_median — current amount / historical median for this ProductCD
 
 Public functions:
-    compute_product_features() — compute is_new_product on a DataFrame
+    compute_product_features() — compute both features on a DataFrame
 """
 
 import numpy as np
@@ -45,6 +44,11 @@ TIME_COL = "TransactionDT"
 # as a first encounter — the conservative (more suspicious) assumption.
 UNKNOWN_FILL = 1
 
+# Fill value for amt_vs_product_median when no prior history exists.
+# WHY -1: consistent with all other aggregation features — signals
+# "no prior history" to tree models without distorting the distribution.
+MISSING_FILL = -1
+
 
 # ── Public API ────────────────────────────────────────────────────────────────
 
@@ -53,20 +57,23 @@ def compute_product_features(df,
                               product_col=PRODUCT_COL,
                               time_col=TIME_COL,
                               unknown_fill=UNKNOWN_FILL,
+                              missing_fill=MISSING_FILL,
                               verbose=True):
     """
-    Compute is_new_product feature on a DataFrame.
+    Compute product profile features on a DataFrame.
 
-    MODEL-AGNOSTIC: output is used by LightGBM, XGBoost, and CatBoost.
+    MODEL-AGNOSTIC: output is used by LightGBM and XGBoost.
 
     IMPORTANT: must be called on the FULL dataset (train + test concatenated)
     BEFORE time_split(), so that test transactions see train history.
     If called after compute_user_aggregations(), df is already sorted by
     time_col — the monotonicity check below will confirm this.
 
-    No leakage: cumcount() on uid + ProductCD counts prior occurrences of
-    this exact pair. cumcount=0 means first occurrence — a fact about the
-    current row, not derived from isFraud or future transactions.
+    No leakage:
+        is_new_product: cumcount() on uid + ProductCD counts prior occurrences
+            only. cumcount=0 means first occurrence. isFraud never accessed.
+        amt_vs_product_median: groupby(ProductCD).expanding().shift(1) uses
+            only strictly prior transactions for each product type.
 
     Parameters
     ----------
@@ -77,16 +84,20 @@ def compute_product_features(df,
     product_col  : str          — product type column (default: 'ProductCD')
                    WHY named param: allows reuse if product column is renamed
     time_col     : str          — timestamp column used for sort verification
-    unknown_fill : int          — fill for NaN uid or product (default: 1)
+    unknown_fill : int          — fill for NaN uid or product in is_new_product
                    WHY 1: unknown user or product → treat as first encounter
                    → conservative assumption (suspicious by default)
+    missing_fill : numeric      — fill for amt_vs_product_median when no prior
+                   history exists (default: -1)
+                   WHY -1: consistent with all other aggregation features —
+                   signals "no prior history" without distorting distribution
     verbose      : bool         — print progress (default: True)
 
     Returns
     -------
     tuple (df, new_feature_cols)
-        df               — input DataFrame with is_new_product column appended
-        new_feature_cols — list with one element: ['is_new_product']
+        df               — input DataFrame with new columns appended
+        new_feature_cols — ['is_new_product', 'amt_vs_product_median']
     """
     group_cols = group_cols or USER_GROUP_COLS
 
@@ -129,15 +140,40 @@ def compute_product_features(df,
         if verbose:
             print(f"   Filled {nan_mask.sum()} NaN rows (unknown uid/product) with {unknown_fill}")
 
-    new_cols = ["is_new_product"]
+    # ── amt_vs_product_median ─────────────────────────────────────────────────
+    # Current amount / historical median amount for this ProductCD.
+    # WHY: fraudsters may buy products at unusual price points vs the product's
+    # typical transaction history — detects price anomalies per product type.
+    # WHY expanding().shift(1): uses only strictly prior transactions for each
+    # ProductCD — consistent with all other aggregation features.
+    # WHY -1 fill: consistent with all other aggregation features — signals
+    # "no prior history" to tree models without distorting the distribution.
+    if verbose:
+        print("\n   Computing amt_vs_product_median ...")
+
+    product_median = (
+        df.groupby(product_col)["TransactionAmt"]
+        .expanding()
+        .median()
+        .shift(1)
+        .reset_index(level=0, drop=True)
+    )
+
+    df["amt_vs_product_median"] = (
+        df["TransactionAmt"] / product_median
+    ).replace([np.inf, -np.inf], missing_fill).fillna(missing_fill).astype(np.float32)
+
+    new_cols = ["is_new_product", "amt_vs_product_median"]
 
     if verbose:
         value_counts = df["is_new_product"].value_counts().to_dict()
         new_pct = value_counts.get(1, 0) / len(df) * 100
         print(f"\n   Shape after  : {df.shape}")
-        print(f"   is_new_product distribution: {value_counts}")
-        print(f"   First-time product purchases: {new_pct:.1f}% of all transactions")
-        nan_remaining = df["is_new_product"].isna().sum()
+        print(f"   is_new_product distribution    : {value_counts}")
+        print(f"   First-time product purchases   : {new_pct:.1f}% of all transactions")
+        print(f"   amt_vs_product_median — NaN    : {df['amt_vs_product_median'].isna().sum()}")
+        print(f"   amt_vs_product_median — filled : {(df['amt_vs_product_median'] == missing_fill).sum()} rows with {missing_fill}")
+        nan_remaining = df[["is_new_product", "amt_vs_product_median"]].isna().sum().sum()
         if nan_remaining == 0:
             print("   NaN check: 0 unexpected NaN ✓")
         else:

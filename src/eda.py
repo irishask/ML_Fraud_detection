@@ -62,31 +62,29 @@ def analyze_target_imbalance(train: pd.DataFrame) -> None:
 
 # ── 1.2 Time Patterns ────────────────────────────────────────────────────────
 
-def analyze_time_range(train: pd.DataFrame, test: pd.DataFrame) -> None:
+def analyze_time_range(train: pd.DataFrame, val: pd.DataFrame, test: pd.DataFrame) -> None:
     """
-    Section 1.2 (part 1) — Print TransactionDT range in seconds and days for
-    train and test. Show histogram with the ~30-day gap.
-    Notebook cells: [12] + [13]
+    Show TransactionDT range in days for train / val / test splits.
+    Called at the end of EDA after save_processed() creates the 3 splits.
+    Replaces the old train-vs-Kaggle-test comparison (Kaggle test removed from project).
     """
-    print("TransactionDT range:")
-    print(f"  Train: {train['TransactionDT'].min():,.0f} — {train['TransactionDT'].max():,.0f}")
-    print(f"  Test:  {test['TransactionDT'].min():,.0f} — {test['TransactionDT'].max():,.0f}")
-    print("\nApproximate days:")
-    print(f"  Train: day {train['TransactionDT'].min() / 86400:.0f} — "
-          f"day {train['TransactionDT'].max() / 86400:.0f}")
-    print(f"  Test:  day {test['TransactionDT'].min() / 86400:.0f} — "
-          f"day {test['TransactionDT'].max() / 86400:.0f}")
+    print("TransactionDT range (days):")
+    for name, df in [("train", train), ("val", val), ("test", test)]:
+        lo = df["TransactionDT"].min() / 86400
+        hi = df["TransactionDT"].max() / 86400
+        print(f"  {name:5s}: day {lo:.0f} — day {hi:.0f}  ({len(df):,} rows)")
 
     fig, ax = plt.subplots(figsize=(12, 4))
-    train_days = train["TransactionDT"] / 86400
-    test_days  = test["TransactionDT"]  / 86400
-    ax.hist(train_days, bins=100, alpha=0.7, color="#3b82f6", label="Train")
-    ax.hist(test_days,  bins=100, alpha=0.7, color="#f59e0b", label="Test")
-    ax.axvline(x=183, color="red", linestyle="--", alpha=0.7, label="Train end (day 183)")
-    ax.axvline(x=213, color="red", linestyle="--", alpha=0.7, label="Test start (day 213)")
+    colors = {"train": "#3b82f6", "val": "#10b981", "test": "#f59e0b"}
+    for name, df, color in [("train", train, colors["train"]),
+                             ("val",   val,   colors["val"]),
+                             ("test",  test,  colors["test"])]:
+        ax.hist(df["TransactionDT"] / 86400, bins=100, alpha=0.7,
+                color=color, label=name.capitalize())
+
     ax.set_xlabel("Day")
     ax.set_ylabel("Transaction count")
-    ax.set_title("Transaction Distribution Over Time — ~30 Day Gap Between Train and Test")
+    ax.set_title("Transaction Distribution Over Time — train / val / test (60/20/20)")
     ax.legend()
     plt.tight_layout()
     plt.show()

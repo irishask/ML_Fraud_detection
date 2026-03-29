@@ -49,9 +49,30 @@ import json
 
 import numpy as np
 import optuna
-from optuna.callbacks import EarlyStoppingCallback
 from sklearn.metrics import roc_auc_score
 from tqdm.auto import tqdm
+
+
+# Custom class:
+class EarlyStoppingCallback:
+    """Stop Optuna study if best AUC does not improve for `patience` trials."""
+    def __init__(self, patience, min_delta=0.0):
+        self.patience   = patience
+        self.min_delta  = min_delta
+        self._best      = None
+        self._no_improv = 0
+
+    def __call__(self, study, trial):
+        if trial.state != optuna.trial.TrialState.COMPLETE:
+            return
+        if self._best is None or trial.value > self._best + self.min_delta:
+            self._best      = trial.value
+            self._no_improv = 0
+        else:
+            self._no_improv += 1
+        if self._no_improv >= self.patience:
+            study.stop()
+
 
 optuna.logging.set_verbosity(optuna.logging.WARNING)
 
@@ -357,7 +378,8 @@ def tune_xgb(X_train, y_train, X_val, y_val,
         max_depth         : [4, 12]
         eta               : [0.01, 0.1]
         subsample         : [0.6, 1.0]
-        colsample_bytree  : [0.4, 1.0]
+        colsample_bytree  : [0.05, 0.30]  — narrowed from [0.4, 1.0] based on Exp 4:
+                            colsample=0.20 gave engineered features fair exposure vs V-columns
         colsample_bylevel : [0.4, 1.0]  — XGBoost-specific, increases diversity
         min_child_weight  : [50, 300]
         lambda            : [0, 5]
@@ -415,7 +437,7 @@ def tune_xgb(X_train, y_train, X_val, y_val,
             "max_depth":         trial.suggest_int("max_depth", 4, 12),
             "eta":               trial.suggest_float("eta", 0.01, 0.1, log=True),
             "subsample":         trial.suggest_float("subsample", 0.6, 1.0),
-            "colsample_bytree":  trial.suggest_float("colsample_bytree", 0.4, 1.0),
+            "colsample_bytree": trial.suggest_float("colsample_bytree", 0.05, 0.30),
             "colsample_bylevel": trial.suggest_float("colsample_bylevel", 0.4, 1.0),
             "min_child_weight":  trial.suggest_int("min_child_weight", 50, 300),
             "lambda":            trial.suggest_float("lambda", 0.0, 5.0),

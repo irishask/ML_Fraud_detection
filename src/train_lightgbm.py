@@ -32,7 +32,7 @@ _V1_PATH = os.path.dirname(os.path.abspath(__file__))
 if _V1_PATH not in sys.path:
     sys.path.append(_V1_PATH)
 
-from tune_optuna import load_params
+from tune_optuna_with_early_stop import load_params
 
 
 # ── Default Parameters ────────────────────────────────────────────────────────
