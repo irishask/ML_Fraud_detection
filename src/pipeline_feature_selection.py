@@ -317,20 +317,19 @@ def evaluate_model(y_true, y_pred, model_name,
                    model=None,
                    top_n=30):
     """
-    Print metrics vs V0 TEST baseline and optionally plot curves + importance.
+    Print metrics vs baseline and optionally plot curves + importance.
 
-    WHY compare to V0 TEST baseline (not val):
-        Val metrics are influenced by Optuna — they are optimistic.
-        Only TEST provides an unbiased comparison point. V0 TEST is the
-        hard reference every experiment must beat.
+    Supports two baseline modes:
+    - v0_test_roc and v0_test_pr both provided (float): show full baseline with deltas
+    - v0_test_roc=None, v0_test_pr=float: show statistical baseline PR only (no ROC)
 
     Parameters
     ----------
     y_true       : pd.Series    — true labels
     y_pred       : np.ndarray   — predicted probabilities
     model_name   : str          — display name
-    v0_test_roc  : float        — V0 baseline Test ROC AUC (0.8953)
-    v0_test_pr   : float        — V0 baseline Test PR AUC (0.5033)
+    v0_test_roc  : float | None — baseline Test ROC AUC (None to skip ROC baseline)
+    v0_test_pr   : float        — baseline Test PR AUC (e.g. 0.035 for statistical baseline)
     split_name   : str          — 'Val' or 'Test' (default: 'Val')
     show_plot    : bool         — plot ROC/PR curves (default: True)
     feature_names: list[str]    — for feature importance plot (optional)
@@ -346,14 +345,24 @@ def evaluate_model(y_true, y_pred, model_name,
     roc_auc = roc_auc_score(y_true, y_pred)
     pr_auc  = average_precision_score(y_true, y_pred)
 
+    baseline_label = "Statistical Baseline" if v0_test_roc is None else "Baseline (Test)"
+    baseline_roc   = "—" if v0_test_roc is None else f"{v0_test_roc:.4f}"
+    baseline_pr    = f"{v0_test_pr:.4f}"
+
     print(f"{'=' * 60}")
     print(f"  {split_name} RESULTS — {model_name}")
     print(f"{'=' * 60}")
     print(f"  {'Model':<28} {'ROC AUC':>8}  {'PR AUC':>8}")
     print(f"  {'─' * 48}")
-    print(f"  {'V0 Baseline (Test)':<28} {v0_test_roc:>8.4f}  {v0_test_pr:>8.4f}")
-    print(f"  {model_name:<28} {roc_auc:>8.4f}  {pr_auc:>8.4f}"
-          f"   Δ ROC={roc_auc - v0_test_roc:+.4f}  Δ PR={pr_auc - v0_test_pr:+.4f}")
+    print(f"  {baseline_label:<28} {baseline_roc:>8}  {baseline_pr:>8}")
+
+    delta_parts = []
+    if v0_test_roc is not None:
+        delta_parts.append(f"Δ ROC={roc_auc - v0_test_roc:+.4f}")
+    delta_parts.append(f"Δ PR={pr_auc - v0_test_pr:+.4f}")
+    delta_str = "   " + "  ".join(delta_parts)
+
+    print(f"  {model_name:<28} {roc_auc:>8.4f}  {pr_auc:>8.4f}{delta_str}")
     print(f"{'=' * 60}")
 
     if show_plot:
@@ -369,31 +378,124 @@ def evaluate_model(y_true, y_pred, model_name,
     return roc_auc, pr_auc
 
 
+# def evaluate_model(y_true, y_pred, model_name,
+#                    v0_test_roc, v0_test_pr,
+#                    split_name="Val",
+#                    show_plot=True,
+#                    feature_names=None,
+#                    model=None,
+#                    top_n=30):
+#     """
+#     Print metrics vs V0 TEST baseline and optionally plot curves + importance.
+
+#     WHY compare to V0 TEST baseline (not val):
+#         Val metrics are influenced by Optuna — they are optimistic.
+#         Only TEST provides an unbiased comparison point. V0 TEST is the
+#         hard reference every experiment must beat.
+
+#     Parameters
+#     ----------
+#     y_true       : pd.Series    — true labels
+#     y_pred       : np.ndarray   — predicted probabilities
+#     model_name   : str          — display name
+#     v0_test_roc  : float        — V0 baseline Test ROC AUC (0.8953)
+#     v0_test_pr   : float        — V0 baseline Test PR AUC (0.5033)
+#     split_name   : str          — 'Val' or 'Test' (default: 'Val')
+#     show_plot    : bool         — plot ROC/PR curves (default: True)
+#     feature_names: list[str]    — for feature importance plot (optional)
+#     model        : xgb.Booster  — for feature importance plot (optional)
+#     top_n        : int          — top N features to plot (default: 30)
+
+#     Returns
+#     -------
+#     tuple (roc_auc, pr_auc)
+#     """
+#     from evaluate_ml import plot_roc_pr, plot_feature_importance
+
+#     roc_auc = roc_auc_score(y_true, y_pred)
+#     pr_auc  = average_precision_score(y_true, y_pred)
+
+#     print(f"{'=' * 60}")
+#     print(f"  {split_name} RESULTS — {model_name}")
+#     print(f"{'=' * 60}")
+#     print(f"  {'Model':<28} {'ROC AUC':>8}  {'PR AUC':>8}")
+#     print(f"  {'─' * 48}")
+#     print(f"  {'V0 Baseline (Test)':<28} {v0_test_roc:>8.4f}  {v0_test_pr:>8.4f}")
+#     print(f"  {model_name:<28} {roc_auc:>8.4f}  {pr_auc:>8.4f}"
+#           f"   Δ ROC={roc_auc - v0_test_roc:+.4f}  Δ PR={pr_auc - v0_test_pr:+.4f}")
+#     print(f"{'=' * 60}")
+
+#     if show_plot:
+#         plot_roc_pr(y_true, y_pred, model_name=f"{model_name} ({split_name})")
+#         if model is not None and feature_names is not None:
+#             plot_feature_importance(
+#                 model,
+#                 feature_names=feature_names,
+#                 top_n=top_n,
+#                 model_name=model_name,
+#             )
+
+#     return roc_auc, pr_auc
+
+
 # ── Final comparison table ────────────────────────────────────────────────────
+
+# def print_comparison_table(results, v0_test_roc, v0_test_pr):
+#     """
+#     Print final comparison: all models vs V0 TEST baseline.
+
+#     Parameters
+#     ----------
+#     results     : dict — {model_name: {"test_roc": float, "test_pr": float}}
+#                   example: {"nb04 LightGBM": {"test_roc": 0.8963, "test_pr": 0.5045}}
+#     v0_test_roc : float — V0 baseline Test ROC AUC
+#     v0_test_pr  : float — V0 baseline Test PR AUC
+#     """
+#     print("=" * 72)
+#     print("FINAL COMPARISON — ALL MODELS vs V0 TEST BASELINE")
+#     print("=" * 72)
+#     print(f"  {'Model':<32} {'Test ROC':>9} {'Test PR':>9} {'Δ ROC':>8} {'Δ PR':>8}")
+#     print(f"  {'─' * 68}")
+#     print(f"  {'V0 Baseline':<32} {v0_test_roc:>9.4f} {v0_test_pr:>9.4f}"
+#           f" {'—':>8} {'—':>8}")
+
+#     for name, metrics in results.items():
+#         roc = metrics["test_roc"]
+#         pr  = metrics["test_pr"]
+#         print(f"  {name:<32} {roc:>9.4f} {pr:>9.4f}"
+#               f" {roc - v0_test_roc:>+8.4f} {pr - v0_test_pr:>+8.4f}")
+
+#     print("=" * 72)
 
 def print_comparison_table(results, v0_test_roc, v0_test_pr):
     """
-    Print final comparison: all models vs V0 TEST baseline.
+    Print final comparison: all models vs baseline.
 
     Parameters
     ----------
     results     : dict — {model_name: {"test_roc": float, "test_pr": float}}
                   example: {"nb04 LightGBM": {"test_roc": 0.8963, "test_pr": 0.5045}}
-    v0_test_roc : float — V0 baseline Test ROC AUC
-    v0_test_pr  : float — V0 baseline Test PR AUC
+    v0_test_roc : float | None — baseline Test ROC AUC (None to skip)
+    v0_test_pr  : float        — baseline Test PR AUC (e.g. 0.035)
     """
+    baseline_label = "Statistical Baseline" if v0_test_roc is None else "Baseline"
+    baseline_roc   = "—" if v0_test_roc is None else f"{v0_test_roc:.4f}"
+    baseline_pr    = f"{v0_test_pr:.4f}"
+
     print("=" * 72)
-    print("FINAL COMPARISON — ALL MODELS vs V0 TEST BASELINE")
+    print("FINAL COMPARISON — ALL MODELS vs STATISTICAL BASELINE" if v0_test_roc is None
+          else "FINAL COMPARISON — ALL MODELS vs BASELINE")
     print("=" * 72)
     print(f"  {'Model':<32} {'Test ROC':>9} {'Test PR':>9} {'Δ ROC':>8} {'Δ PR':>8}")
     print(f"  {'─' * 68}")
-    print(f"  {'V0 Baseline':<32} {v0_test_roc:>9.4f} {v0_test_pr:>9.4f}"
+    print(f"  {baseline_label:<32} {baseline_roc:>9} {baseline_pr:>9}"
           f" {'—':>8} {'—':>8}")
 
     for name, metrics in results.items():
         roc = metrics["test_roc"]
         pr  = metrics["test_pr"]
-        print(f"  {name:<32} {roc:>9.4f} {pr:>9.4f}"
-              f" {roc - v0_test_roc:>+8.4f} {pr - v0_test_pr:>+8.4f}")
+        delta_roc = f"{roc - v0_test_roc:>+8.4f}" if v0_test_roc is not None else f"{'—':>8}"
+        delta_pr  = f"{pr - v0_test_pr:>+8.4f}"
+        print(f"  {name:<32} {roc:>9.4f} {pr:>9.4f} {delta_roc} {delta_pr}")
 
     print("=" * 72)

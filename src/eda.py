@@ -1091,11 +1091,122 @@ def analyze_uid_d1_comparison(train: pd.DataFrame) -> None:
     plt.show()
 
 
-# ── 2.8 Amount Variance Per Group ────────────────────────────────────────────
+# ── 2.8 UID Anchor Fix — TransactionDT − D1 ─────────────────────────────────
+
+def analyze_uid_anchor_fix(train: pd.DataFrame) -> None:
+    """
+    Section 2.8 — Compare card1+addr1 vs card1+addr1+round(anchor)
+    where anchor = TransactionDT/86400 - D1.
+
+    Tests whether the anchor transformation resolves card identity
+    collisions within existing UID groups, improving fraud purity
+    without the catastrophic fragmentation caused by raw D1.
+
+    The anchor represents the approximate "card activation date":
+    if two transactions share the same card1+addr1 but have different
+    anchors, they likely belong to different physical cards (identity
+    collision). Rounding to nearest day absorbs floating-point noise.
+
+    Notebook cell: [new — between 2.7 and 2.9]
+    """
+    df = train.dropna(subset=["card1", "addr1", "D1"]).copy()
+    
+    # TransactionDT is in seconds; /86400 converts to days (D1 is already in days)
+    df["anchor"] = (df["TransactionDT"] / 86400) - df["D1"]
+    df["anchor_round"] = np.floor(df["anchor"])
+
+    uid_configs = {
+        "card1+addr1":              ["card1", "addr1"],
+        "card1+addr1+anchor_round": ["card1", "addr1", "anchor_round"],
+    }
+
+    stats = {}
+    for lbl, cols in uid_configs.items():
+        grp   = df.groupby(cols)
+        sizes = grp.size()
+        frate = grp["isFraud"].mean()
+        stats[lbl] = {"sizes": sizes, "frate": frate}
+
+    print(f"{'Metric':<40}  {'card1+addr1':>20}  {'+ anchor_round':>20}")
+    print("-" * 84)
+    for metric, fn in [
+        ("Total groups",            lambda s: f"{len(s['sizes']):,}"),
+        ("Avg tx/group",            lambda s: f"{s['sizes'].mean():.2f}"),
+        ("Median tx/group",         lambda s: f"{s['sizes'].median():.0f}"),
+        ("% groups with 1 tx",      lambda s: f"{(s['sizes']==1).mean():.1%}"),
+        ("% groups with >=5 tx",    lambda s: f"{(s['sizes']>=5).mean():.1%}"),
+        ("fraud_rate variance",     lambda s: f"{s['frate'].var():.6f}"),
+        ("% groups fraud_rate = 0", lambda s: f"{(s['frate']==0).mean():.2%}"),
+        ("% groups fraud_rate = 1", lambda s: f"{(s['frate']==1.0).mean():.2%}"),
+    ]:
+        r1 = fn(stats["card1+addr1"])
+        r2 = fn(stats["card1+addr1+anchor_round"])
+        print(f"  {metric:<38}  {r1:>20}  {r2:>20}")
+
+    # Collision analysis: how many groups get split?
+    n_orig   = len(stats["card1+addr1"]["sizes"])
+    n_anchor = len(stats["card1+addr1+anchor_round"]["sizes"])
+    n_split  = n_anchor - n_orig
+    pct_split = n_split / n_orig * 100 if n_orig > 0 else 0
+
+    print(f"\n  Groups split by anchor   : {n_split:,} ({pct_split:.1f}% of original groups)")
+    print(f"  Expansion factor         : {n_anchor / n_orig:.2f}×")
+
+    # Compare fragmentation vs raw D1 (from Section 2.7)
+    print(f"\n  Fragmentation comparison:")
+    print(f"    card1+addr1+D1 (raw)     : 235,027 groups, 73.9% single-tx  ← catastrophic")
+    print(f"    card1+addr1+anchor_round : {n_anchor:,} groups, "
+          f"{(stats['card1+addr1+anchor_round']['sizes'] == 1).mean():.1%} single-tx")
+
+    # Anchor uniqueness within groups: how many distinct anchors per group?
+    anchors_per_group = df.groupby(["card1", "addr1"])["anchor_round"].nunique()
+    multi_anchor = (anchors_per_group > 1).sum()
+    print(f"\n  Groups with >1 distinct anchor (identity collisions): "
+          f"{multi_anchor:,} ({multi_anchor / n_orig:.1%})")
+    print(f"  Anchor values per group — median: {anchors_per_group.median():.0f}, "
+          f"mean: {anchors_per_group.mean():.2f}, max: {anchors_per_group.max()}")
+
+    # Visualize
+    colors = {"card1+addr1": "#b3cde3", "card1+addr1+anchor_round": "#c4b7d4"}
+    fig, axes = plt.subplots(1, 3, figsize=(18, 4))
+
+    ax = axes[0]
+    for lbl, s in stats.items():
+        ax.hist(s["sizes"].clip(upper=30), bins=30, alpha=0.6,
+                color=colors[lbl], label=lbl, density=True)
+    ax.axvline(x=1, color="red",    linestyle="--", alpha=0.5, label="1 tx")
+    ax.axvline(x=5, color="orange", linestyle="--", alpha=0.5, label="5 tx")
+    ax.set_xlabel("Group size (capped at 30)")
+    ax.set_ylabel("Density")
+    ax.set_title("Anchor Fix — Group Size Distribution")
+    ax.legend(fontsize=8)
+
+    ax = axes[1]
+    for lbl, s in stats.items():
+        ax.hist(s["frate"], bins=30, alpha=0.6,
+                color=colors[lbl], label=lbl, density=True)
+    ax.set_xlabel("Fraud rate per group")
+    ax.set_ylabel("Density")
+    ax.set_title("Anchor Fix — Fraud Purity")
+    ax.legend(fontsize=8)
+
+    ax = axes[2]
+    ax.hist(anchors_per_group.clip(upper=20), bins=20, color="#ffe0b2", alpha=0.9)
+    ax.axvline(x=1, color="green", linestyle="--", alpha=0.7, label="1 anchor (no collision)")
+    ax.set_xlabel("Distinct anchors per group (capped at 20)")
+    ax.set_ylabel("Number of groups")
+    ax.set_title("Identity Collisions per Group\n(>1 = multiple cards share same UID)")
+    ax.legend(fontsize=8)
+
+    plt.tight_layout()
+    plt.show()
+
+
+# ── 2.9 Amount Variance Per Group ────────────────────────────────────────────
 
 def analyze_amount_variance_by_group(train: pd.DataFrame) -> None:
     """
-    Section 2.8 — Amount std in fraud vs clean groups; amt_ratio distribution.
+    Section 2.9 — Amount std in fraud vs clean groups; amt_ratio distribution.
     Notebook cell: [101]
     """
     grp = (train.dropna(subset=["card1", "addr1"])
@@ -1176,11 +1287,11 @@ def analyze_amount_variance_by_group(train: pd.DataFrame) -> None:
     plt.show()
 
 
-# ── 2.9 Transaction Velocity ─────────────────────────────────────────────────
+# ── 2.10 Transaction Velocity ─────────────────────────────────────────────────
 
 def analyze_velocity(train: pd.DataFrame) -> None:
     """
-    Section 2.9 — Rolling velocity 3d/7d/30d: print fraud vs legit stats
+    Section 2.10 — Rolling velocity 3d/7d/30d: print fraud vs legit stats
     and show distributions. Uses closed='left' to exclude current transaction.
     Notebook cell: [104]
     """
@@ -1245,11 +1356,11 @@ def analyze_velocity(train: pd.DataFrame) -> None:
     plt.show()
 
 
-# ── 2.10 Device / Email Novelty ──────────────────────────────────────────────
+# ── 2.11 Device / Email Novelty ──────────────────────────────────────────────
 
 def analyze_novelty(train: pd.DataFrame) -> None:
     """
-    Section 2.10 — is_new_device / is_new_P_email / is_new_R_email: lift table
+    Section 2.11 — is_new_device / is_new_P_email / is_new_R_email: lift table
     and fraud rate bar charts.
     Notebook cell: [107]
     """

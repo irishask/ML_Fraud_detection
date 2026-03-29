@@ -256,8 +256,12 @@ def evaluate_model(y_val, y_pred, model_name,
                    show_plot=True,
                    top_n=30):
     """
-    Print val metrics vs V0 baseline and optionally plot ROC/PR curves
+    Print metrics vs baseline and optionally plot ROC/PR curves
     and feature importance.
+
+    Supports two baseline modes:
+    - v0_roc and v0_pr both provided (float): show baseline ROC + PR with deltas
+    - v0_roc=None, v0_pr=float: show statistical baseline PR only (no ROC)
 
     WHY show_plot=True default: visual inspection of curves is the primary
     way to catch overfitting or unexpected behaviour during development.
@@ -268,8 +272,8 @@ def evaluate_model(y_val, y_pred, model_name,
     y_val         : pd.Series    — true validation labels
     y_pred        : np.ndarray   — predicted probabilities on val set
     model_name    : str          — display name (e.g. 'LightGBM', 'XGBoost')
-    v0_roc        : float        — V0 baseline Val ROC AUC (reference)
-    v0_pr         : float        — V0 baseline Val PR AUC (reference)
+    v0_roc        : float | None — baseline ROC AUC (None to skip ROC baseline)
+    v0_pr         : float        — baseline PR AUC (e.g. 0.035 for statistical baseline)
     feature_names : list[str]    — column names for feature importance plot
                     WHY None default: only required when show_plot=True and
                     model is provided; safe to omit for prediction-only calls
@@ -292,12 +296,22 @@ def evaluate_model(y_val, y_pred, model_name,
     roc_auc = roc_auc_score(y_val, y_pred)
     pr_auc  = average_precision_score(y_val, y_pred)
 
+    baseline_label = "statistical baseline" if v0_roc is None else "baseline"
+    baseline_roc   = "—" if v0_roc is None else f"{v0_roc:.4f}"
+    baseline_pr    = f"{v0_pr:.4f}"
+
     print(f"{'=' * 52}")
     print(f"  {'Model':<20} {'ROC AUC':>8}  {'PR AUC':>8}")
     print(f"{'=' * 52}")
-    print(f"  {'v0 baseline':<20} {v0_roc:>8.4f}  {v0_pr:>8.4f}")
-    print(f"  {model_name:<20} {roc_auc:>8.4f}  {pr_auc:>8.4f}"
-          f"   Δ ROC={roc_auc - v0_roc:+.4f}  Δ PR={pr_auc - v0_pr:+.4f}")
+    print(f"  {baseline_label:<20} {baseline_roc:>8}  {baseline_pr:>8}")
+
+    delta_parts = []
+    if v0_roc is not None:
+        delta_parts.append(f"Δ ROC={roc_auc - v0_roc:+.4f}")
+    delta_parts.append(f"Δ PR={pr_auc - v0_pr:+.4f}")
+    delta_str = "   " + "  ".join(delta_parts)
+
+    print(f"  {model_name:<20} {roc_auc:>8.4f}  {pr_auc:>8.4f}{delta_str}")
     print(f"{'=' * 52}")
 
     if show_plot:
@@ -311,6 +325,19 @@ def evaluate_model(y_val, y_pred, model_name,
             )
 
     return roc_auc, pr_auc
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 # ── Build ensemble ────────────────────────────────────────────────────────────
@@ -369,6 +396,129 @@ def build_ensemble(y_val, y_pred_lgbm, y_pred_xgb, verbose=True):
 
 # ── Frozen TEST evaluation ────────────────────────────────────────────────────
 
+# def run_test_evaluation(model_files, X_test_lgbm, y_test,
+#                         y_val, y_pred_lgbm, y_pred_xgb, weights,
+#                         v0_val_roc, v0_val_pr,
+#                         v0_test_roc, v0_test_pr,
+#                         verbose=True):
+#     """
+#     Load saved models, predict on frozen TEST, print final comparison table.
+
+#     WHY load from disk (not reuse in-memory models): guarantees that the exact
+#     saved artifact is evaluated — not an in-memory object that may differ from
+#     what was pickled. This matches production: the model file IS the deliverable.
+
+#     WHY weights from val (not recomputed on test): weights must be determined
+#     before touching TEST — recomputing on test would use test information to
+#     select the ensemble composition, which is leakage.
+
+#     IMPORTANT: this function touches the frozen TEST set. Call it only once,
+#     after all model selection and tuning decisions are final.
+
+#     Parameters
+#     ----------
+#     model_files  : dict[str, Path]  — {'lgbm': Path, 'xgb': Path}
+#     X_test_lgbm  : pd.DataFrame     — frozen TEST features
+#     y_test       : pd.Series        — frozen TEST labels
+#     y_val        : pd.Series        — val labels
+#     y_pred_lgbm  : np.ndarray       — LightGBM val predictions
+#     y_pred_xgb   : np.ndarray       — XGBoost val predictions
+#     weights      : dict[str, float] — ensemble weights from build_ensemble()
+#                    WHY passed in: must be the same weights used on val —
+#                    recomputing on test would leak test signal into model selection
+#     v0_val_roc   : float            — V0 baseline Val ROC AUC
+#     v0_val_pr    : float            — V0 baseline Val PR AUC
+#     v0_test_roc  : float            — V0 baseline Test ROC AUC
+#     v0_test_pr   : float            — V0 baseline Test PR AUC
+#     verbose      : bool             — print table (default: True)
+
+#     Returns
+#     -------
+#     pd.DataFrame — final comparison table (all models + ensemble vs V0 baseline)
+#     """
+#     import xgboost as xgb_lib
+#     from sklearn.metrics import roc_auc_score, average_precision_score
+#     from train_ensemble import weighted_average
+
+#     # ── Load models from disk and predict on frozen TEST ──────────────────────
+#     with open(model_files["lgbm"], "rb") as f:
+#         model_lgbm = pickle.load(f)
+#     y_pred_lgbm_test = model_lgbm.predict_proba(X_test_lgbm)[:, 1].astype("float32")
+
+#     with open(model_files["xgb"], "rb") as f:
+#         model_xgb = pickle.load(f)
+#     dtest           = xgb_lib.DMatrix(X_test_lgbm)
+#     y_pred_xgb_test = model_xgb.predict(
+#         dtest, iteration_range=(0, model_xgb.best_iteration + 1)
+#     ).astype("float32")
+
+#     # ── Ensemble TEST — use weights determined on val (no leakage) ────────────
+#     y_pred_ensemble_test = weighted_average(
+#         {"lgbm": y_pred_lgbm_test, "xgb": y_pred_xgb_test},
+#         weights,
+#     )
+
+#     # ── Build final comparison table ──────────────────────────────────────────
+#     val_preds  = {"lgbm": y_pred_lgbm,      "xgb": y_pred_xgb,      "ensemble": None}
+#     test_preds = {"lgbm": y_pred_lgbm_test, "xgb": y_pred_xgb_test, "ensemble": y_pred_ensemble_test}
+
+#     model_labels = {
+#         "lgbm":     "LightGBM Optuna",
+#         "xgb":      "XGBoost Optuna",
+#         "ensemble": "Ensemble (LGBM+XGB)",
+#     }
+
+#     rows = [{
+#         "Model":        "V0 Baseline",
+#         "Val ROC AUC":  v0_val_roc,
+#         "Val PR AUC":   v0_val_pr,
+#         "Test ROC AUC": v0_test_roc,
+#         "Test PR AUC":  v0_test_pr,
+#         "Δ Test ROC":   "+0.0000",
+#         "Δ Test PR":    "+0.0000",
+#     }]
+
+#     for key, label in model_labels.items():
+#         vp      = val_preds[key]
+#         tp      = test_preds[key]
+#         val_roc = roc_auc_score(y_val, vp)        if vp is not None else None
+#         val_pr  = average_precision_score(y_val, vp) if vp is not None else None
+#         tst_roc = roc_auc_score(y_test, tp)
+#         tst_pr  = average_precision_score(y_test, tp)
+#         rows.append({
+#             "Model":        label,
+#             "Val ROC AUC":  val_roc,
+#             "Val PR AUC":   val_pr,
+#             "Test ROC AUC": tst_roc,
+#             "Test PR AUC":  tst_pr,
+#             "Δ Test ROC":   f"{tst_roc - v0_test_roc:+.4f}",
+#             "Δ Test PR":    f"{tst_pr  - v0_test_pr:+.4f}",
+#         })
+
+#     comparison = pd.DataFrame(rows)
+
+#     if verbose:
+#         print("=" * 75)
+#         print("FINAL RESULTS — VAL + FROZEN TEST")
+#         print("=" * 75)
+#         print(f"  {'Model':<22} {'Val ROC':>8} {'Val PR':>8} "
+#               f"{'Test ROC':>9} {'Test PR':>8} {'Δ Test ROC':>11} {'Δ Test PR':>10}")
+#         print(f"  {'─' * 71}")
+#         for _, row in comparison.iterrows():
+#             val_roc = f"{row['Val ROC AUC']:.4f}" if row["Val ROC AUC"] is not None else "   —   "
+#             val_pr  = f"{row['Val PR AUC']:.4f}"  if row["Val PR AUC"]  is not None else "   —   "
+#             print(
+#                 f"  {row['Model']:<22} {val_roc:>8} {val_pr:>8} "
+#                 f"{row['Test ROC AUC']:>9.4f} {row['Test PR AUC']:>8.4f} "
+#                 f"{row['Δ Test ROC']:>11} {row['Δ Test PR']:>10}"
+#             )
+#         print("=" * 75)
+
+#     return comparison
+
+
+# ── Frozen TEST evaluation ────────────────────────────────────────────────────
+
 def run_test_evaluation(model_files, X_test_lgbm, y_test,
                         y_val, y_pred_lgbm, y_pred_xgb, weights,
                         v0_val_roc, v0_val_pr,
@@ -376,6 +526,10 @@ def run_test_evaluation(model_files, X_test_lgbm, y_test,
                         verbose=True):
     """
     Load saved models, predict on frozen TEST, print final comparison table.
+
+    Supports two baseline modes:
+    - v0_*_roc and v0_*_pr all provided (float): show full baseline row with deltas
+    - v0_*_roc=None: show statistical baseline PR only, deltas computed vs v0_*_pr
 
     WHY load from disk (not reuse in-memory models): guarantees that the exact
     saved artifact is evaluated — not an in-memory object that may differ from
@@ -399,15 +553,15 @@ def run_test_evaluation(model_files, X_test_lgbm, y_test,
     weights      : dict[str, float] — ensemble weights from build_ensemble()
                    WHY passed in: must be the same weights used on val —
                    recomputing on test would leak test signal into model selection
-    v0_val_roc   : float            — V0 baseline Val ROC AUC
-    v0_val_pr    : float            — V0 baseline Val PR AUC
-    v0_test_roc  : float            — V0 baseline Test ROC AUC
-    v0_test_pr   : float            — V0 baseline Test PR AUC
+    v0_val_roc   : float | None     — baseline Val ROC AUC (None to skip)
+    v0_val_pr    : float            — baseline Val PR AUC (e.g. 0.035)
+    v0_test_roc  : float | None     — baseline Test ROC AUC (None to skip)
+    v0_test_pr   : float            — baseline Test PR AUC (e.g. 0.035)
     verbose      : bool             — print table (default: True)
 
     Returns
     -------
-    pd.DataFrame — final comparison table (all models + ensemble vs V0 baseline)
+    pd.DataFrame — final comparison table (all models + ensemble vs baseline)
     """
     import xgboost as xgb_lib
     from sklearn.metrics import roc_auc_score, average_precision_score
@@ -441,14 +595,15 @@ def run_test_evaluation(model_files, X_test_lgbm, y_test,
         "ensemble": "Ensemble (LGBM+XGB)",
     }
 
+    baseline_label = "Statistical Baseline" if v0_test_roc is None else "Baseline"
     rows = [{
-        "Model":        "V0 Baseline",
+        "Model":        baseline_label,
         "Val ROC AUC":  v0_val_roc,
         "Val PR AUC":   v0_val_pr,
         "Test ROC AUC": v0_test_roc,
         "Test PR AUC":  v0_test_pr,
-        "Δ Test ROC":   "+0.0000",
-        "Δ Test PR":    "+0.0000",
+        "Δ Test ROC":   "—",
+        "Δ Test PR":    "—",
     }]
 
     for key, label in model_labels.items():
@@ -458,14 +613,18 @@ def run_test_evaluation(model_files, X_test_lgbm, y_test,
         val_pr  = average_precision_score(y_val, vp) if vp is not None else None
         tst_roc = roc_auc_score(y_test, tp)
         tst_pr  = average_precision_score(y_test, tp)
+
+        delta_roc = f"{tst_roc - v0_test_roc:+.4f}" if v0_test_roc is not None else "—"
+        delta_pr  = f"{tst_pr  - v0_test_pr:+.4f}"
+
         rows.append({
             "Model":        label,
             "Val ROC AUC":  val_roc,
             "Val PR AUC":   val_pr,
             "Test ROC AUC": tst_roc,
             "Test PR AUC":  tst_pr,
-            "Δ Test ROC":   f"{tst_roc - v0_test_roc:+.4f}",
-            "Δ Test PR":    f"{tst_pr  - v0_test_pr:+.4f}",
+            "Δ Test ROC":   delta_roc,
+            "Δ Test PR":    delta_pr,
         })
 
     comparison = pd.DataFrame(rows)
@@ -478,11 +637,13 @@ def run_test_evaluation(model_files, X_test_lgbm, y_test,
               f"{'Test ROC':>9} {'Test PR':>8} {'Δ Test ROC':>11} {'Δ Test PR':>10}")
         print(f"  {'─' * 71}")
         for _, row in comparison.iterrows():
-            val_roc = f"{row['Val ROC AUC']:.4f}" if row["Val ROC AUC"] is not None else "   —   "
-            val_pr  = f"{row['Val PR AUC']:.4f}"  if row["Val PR AUC"]  is not None else "   —   "
+            val_roc  = f"{row['Val ROC AUC']:.4f}" if row["Val ROC AUC"]  is not None else "   —   "
+            val_pr   = f"{row['Val PR AUC']:.4f}"  if row["Val PR AUC"]   is not None else "   —   "
+            test_roc = f"{row['Test ROC AUC']:.4f}" if row["Test ROC AUC"] is not None else "   —   "
+            test_pr  = f"{row['Test PR AUC']:.4f}"  if row["Test PR AUC"]  is not None else "   —   "
             print(
                 f"  {row['Model']:<22} {val_roc:>8} {val_pr:>8} "
-                f"{row['Test ROC AUC']:>9.4f} {row['Test PR AUC']:>8.4f} "
+                f"{test_roc:>9} {test_pr:>8} "
                 f"{row['Δ Test ROC']:>11} {row['Δ Test PR']:>10}"
             )
         print("=" * 75)
