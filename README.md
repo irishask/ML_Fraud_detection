@@ -22,7 +22,7 @@ End-to-end fraud detection pipeline on the Kaggle IEEE-CIS / Vesta Corporation d
 | V3 LightGBM (PR AUC + instance weighting) | 0.8904 | 0.5142 |
 | **★ Ensemble V2+V3 (Final)** | **0.8990** | **0.5178** |
 
-**~14.8× improvement in PR AUC over statistical baseline.**  
+**~14.8x improvement in PR AUC over statistical baseline.**  
 Comparable to top 20% of 6,381 Kaggle teams — evaluated on a strictly frozen test set, touched exactly once.
 
 ---
@@ -37,11 +37,11 @@ Comparable to top 20% of 6,381 Kaggle teams — evaluated on a strictly frozen t
 ### Feature Engineering — 24 New Features
 All features computed on full dataset (train+test concatenated), using strictly prior transactions only (`expanding().shift(1)`, `rolling(closed='left')`). Zero leakage by design.
 
-- **Aggregation (18):** transaction history per card — velocity, amounts, email/device diversity
+- **Aggregation (16):** transaction history per card — velocity, amounts, email/device diversity
 - **Behavioral Fingerprint (4):** deviation from card's personal spending pattern
 - **Product Profile (2):** purchase pattern per ProductCD
 
-**UID = card1 + addr1** — reconstructed user identity, confirmed by 6 independent analyses (incl. anchor fix test).
+**UID = card1 + addr1** — reconstructed user identity, confirmed by 5 independent analyses.
 
 ### Models
 - **LightGBM V2** — Optuna med_high (75 trials, 75% data), ROC AUC objective
@@ -59,13 +59,11 @@ Optuna TPE — Bayesian optimization, learns from every trial.
 
 | # | Experiment | Result |
 |---|---|---|
-| 1 | V2: Feature Engineering + Optuna (ROC AUC) | LightGBM ✅ best single model. XGBoost and CatBoost below LightGBM on PR AUC. |
+| 1 | V2: Feature Engineering + Optuna (ROC AUC) | LightGBM ✅ improved vs statistical baseline. XGBoost + CatBoost below statistical baseline. |
 | 2 | OOF Stacking (LightGBM → XGBoost) | ❌ 3.5% fraud rate → corrupted signal in small temporal folds |
-| 3 | XGBoost top-100 features from LightGBM | ❌ XGBoost shifts to C-columns (depth-wise architecture) — Test PR 0.4666, below all other models |
-| 4 | amt_vs_product_median (24th feature) | ✅ Ranked #4 in LightGBM importance, Test PR 0.5033→0.5087 |
-| 5 | UID anchor fix (floor(TransactionDT/86400 − D1)) | ❌ As UID: groups ×5.3, fraud purity drops. 1st place used it for aggregation features, not as UID. |
-| 6 | V3: PR AUC objective + instance weighting | ✅ PR improved, ROC tradeoff — expected at 3.5% fraud rate |
-| 7 | Ensemble V2+V3 | ✅ Best across both metrics simultaneously — final model |
+| 3 | XGBoost top-100 features from LightGBM | ❌ Still selected V-columns — all numerical, no enforcement possible |
+| 4 | V3: PR AUC objective + instance weighting | ✅ PR improved, ROC tradeoff — expected at 3.5% fraud rate |
+| 5 | Ensemble V2+V3 | ✅ Best across both metrics simultaneously — final model |
 
 ---
 
@@ -89,53 +87,21 @@ With 3.5% fraud rate, ROC AUC has a ceiling effect — nearly any model achieves
 ## Project Structure
 ```
 ML_Fraud_detection/
-├── data/
-│   ├── raw/                            # Original Kaggle CSVs — never modified
-│   │   ├── train_transaction.csv
-│   │   └── train_identity.csv
-│   ├── orig_full_train.parquet         # Full merged dataset
-│   ├── train.parquet                   # 60% train split
-│   ├── val.parquet                     # 20% val split
-│   └── test.parquet                    # 20% frozen test split
 ├── src/
-│   ├── config.py                       # Shared paths, constants, seeds
-│   ├── data_loader.py                  # Load/merge/save raw and processed data
-│   ├── eda.py                          # EDA analysis functions
-│   ├── evaluate_ml.py                  # ROC/PR plots, feature importance
-│   ├── feature_init_utils.py           # Initial features from EDA (time, device)
-│   ├── pipeline_preprocess.py          # LightGBM/XGBoost preprocessing + Optuna
-│   ├── pipeline_evaluate.py            # Model evaluation utilities
-│   ├── pipeline_feature_selection.py   # XGBoost top-N experiment
-│   ├── preproc_agg.py                  # Aggregation features (18)
-│   ├── preproc_behavioral.py           # Behavioral fingerprint features (4)
-│   ├── preproc_product.py              # Product profile features (2)
-│   ├── preproc_lgbm_xgboost.py         # Label encoding for LightGBM/XGBoost
-│   ├── preproc_weights.py              # V3 instance weighting
-│   ├── project_utils.py                # Project utilities
-│   ├── train_lightgbm.py              # LightGBM training
-│   ├── train_xgboost.py               # XGBoost training
-│   ├── train_lgbm_v3.py               # V3 LightGBM training
-│   ├── train_ensemble.py              # Ensemble utilities
-│   ├── train_stacking.py              # OOF stacking (experiment, not used)
-│   ├── tune_optuna_with_early_stop.py  # V2 Optuna (ROC AUC objective)
-│   └── tune_optuna_v3.py              # V3 Optuna (PR AUC objective)
-├── v2/
-│   ├── 02_feature_engineering.ipynb    # 24 engineered features
-│   ├── 03_preprocess_train_clean_optuna.ipynb  # Preprocessing + Optuna
-│   ├── 04_predict_evaluate.ipynb       # Train → Predict → Evaluate (V2)
-│   └── 05_feature_selection_xgb.ipynb  # XGBoost top-N experiment
-├── v3/
-│   └── 04_train_evaluate_v3.ipynb      # V3: PR AUC + instance weighting
+│   ├── config.py
+│   ├── pipeline_preprocess.py      # Feature engineering
+│   ├── pipeline_evaluate.py        # Evaluation utilities
+│   ├── preproc_weights.py          # V3 instance weighting
+│   ├── tune_optuna_v3.py           # V3 Optuna (PR AUC objective)
+│   └── train_lgbm_v3.py            # V3 LightGBM training
+├── v0/                             # First model version notebooks
+├── v3/                             # V3 notebooks
+│   └── 04_train_evaluate_v3.ipynb
 ├── outputs/
-│   ├── enriched/                       # Feature-enriched splits
-│   ├── preproc/                        # Preprocessed splits + encoding map
-│   ├── models/                         # Saved models (.pkl)
-│   ├── best_params_lgbm.json           # V2 Optuna params
-│   ├── best_params_lgbm_v3.json        # V3 Optuna params
-│   └── best_params_xgb.json            # XGBoost Optuna params
-├── 01_eda.ipynb                        # EDA — data exploration + UID validation
-├── requirements.txt
-└── .gitignore
+│   ├── preproc/                    # Preprocessed splits
+│   ├── models/                     # Saved models
+│   └── best_params_lgbm_v3.json    # V3 Optuna params
+└── README.md
 ```
 
 ---
